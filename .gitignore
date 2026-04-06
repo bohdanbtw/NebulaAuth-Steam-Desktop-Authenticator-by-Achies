@@ -363,3 +363,6 @@ MigrationBackup/
 FodyWeavers.xsd
 
 todo/
+
+# Copilot local planning artifacts
+.copilot/

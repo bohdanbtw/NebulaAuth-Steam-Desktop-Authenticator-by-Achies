@@ -1,7 +1,7 @@
 using System;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net.Http;
 using Microsoft.Web.WebView2.Core;
 using NebulaAuth.Model;
 using NebulaAuth.Model.Entities;
@@ -16,13 +16,13 @@ namespace NebulaAuth.Helpers;
 /// <summary>
 /// Automatically approves Steam QR-code login inside the embedded WebView2.
 ///
-/// Flow:
-///   1. The login page JS calls Steam's BeginAuthSessionViaQR API.
-///   2. We intercept the HTTP response in C# via WebResourceResponseReceived
-///      and deserialize the protobuf to extract the clientId.
-///   3. With the clientId + mafile's SharedSecret + SteamId we call
-///      UpdateAuthSessionWithMobileConfirmation — exactly what the Steam Mobile App does.
-///   4. The browser detects the server-side approval and redirects to the inventory.
+///// Flow:
+/////   1. The login page JS calls Steam's BeginAuthSessionViaQR API.
+/////   2. We intercept the HTTP response in C# via WebResourceResponseReceived
+/////      and deserialize the protobuf to extract the clientId.
+/////   3. With the clientId + mafile's SharedSecret + SteamId we call
+/////      UpdateAuthSessionWithMobileConfirmation — exactly what the Steam Mobile App does.
+/////   4. The browser detects the server-side approval and redirects to the inventory.
 /// </summary>
 public class SteamQRCodeAuthenticator
 {
@@ -32,6 +32,9 @@ public class SteamQRCodeAuthenticator
     private bool _approvalInProgress;
     private bool _approved;
     private bool _redirected;
+    private HttpClient? _authClient;
+    private string? _accessToken;
+    private Task? _authPreparationTask;
 
     public event EventHandler<AuthStatusEventArgs>? StatusChanged;
 
@@ -44,6 +47,9 @@ public class SteamQRCodeAuthenticator
         _coreWebView.WebResourceResponseReceived += OnWebResourceResponseReceived;
         _coreWebView.NavigationCompleted += OnNavigationCompleted;
 
+        // Safe prewarm only (no refresh here) so UI starts instantly without risking state conflicts.
+        _authPreparationTask = PrewarmAuthContextAsync();
+
         var url = "https://steamcommunity.com/login/home/?goto=%2Fmy%2Finventory%2F";
         _coreWebView.Navigate(url);
 
@@ -54,6 +60,78 @@ public class SteamQRCodeAuthenticator
         });
 
         return Task.CompletedTask;
+    }
+
+    private async Task PrewarmAuthContextAsync()
+    {
+        try
+        {
+            await PrepareAuthContextAsync(refreshIfNeeded: false);
+        }
+        catch
+        {
+            // Prewarm failure is non-fatal; real preparation happens on approval.
+            _authPreparationTask = null;
+        }
+    }
+
+    private async Task PrepareAuthContextAsync(bool refreshIfNeeded)
+    {
+        if (_mafile?.SessionData == null)
+        {
+            throw new SessionInvalidException();
+        }
+
+        var token = _mafile.SessionData.GetMobileToken();
+        if ((token == null || token.Value.IsExpired) && refreshIfNeeded)
+        {
+            StatusChanged?.Invoke(this, new AuthStatusEventArgs
+            {
+                Status = "Refreshing mobile session...",
+                IsLoading = true
+            });
+
+            await MaClient.RefreshSession(_mafile);
+            token = _mafile.SessionData?.GetMobileToken();
+        }
+
+        if (token == null || token.Value.IsExpired)
+        {
+            throw new SessionPermanentlyExpiredException();
+        }
+
+        _authClient = MaClient.GetHttpClientHandlerPair(_mafile).Client;
+        _accessToken = token.Value.Token;
+    }
+
+    private async Task EnsureAuthContextReadyAsync()
+    {
+        if (_authClient != null && !string.IsNullOrWhiteSpace(_accessToken))
+        {
+            return;
+        }
+
+        if (_authPreparationTask != null)
+        {
+            try
+            {
+                await _authPreparationTask;
+                if (_authClient != null && !string.IsNullOrWhiteSpace(_accessToken))
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // Ignore and rebuild below.
+            }
+            finally
+            {
+                _authPreparationTask = null;
+            }
+        }
+
+        await PrepareAuthContextAsync(refreshIfNeeded: true);
     }
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -91,7 +169,6 @@ public class SteamQRCodeAuthenticator
             {
                 await HandleQRSessionResponseAsync(e);
             }
-            // After approval, detect when cookies are set so we can navigate immediately
             else if (_approved && !_redirected && requestUri.Contains("finalizelogin", StringComparison.OrdinalIgnoreCase))
             {
                 if (e.Response.StatusCode == 200)
@@ -108,8 +185,7 @@ public class SteamQRCodeAuthenticator
                 if (e.Response.StatusCode == 200)
                 {
                     _redirected = true;
-                    // Small delay to let all cookie transfers complete
-                    await Task.Delay(500);
+                    await Task.Delay(120);
                     _coreWebView?.Navigate("https://steamcommunity.com/my/inventory/");
                 }
             }
@@ -124,9 +200,7 @@ public class SteamQRCodeAuthenticator
     {
         if (_approvalInProgress || _approved) return;
 
-        var statusCode = e.Response.StatusCode;
-
-        if (statusCode != 200)
+        if (e.Response.StatusCode != 200)
         {
             return;
         }
@@ -139,18 +213,7 @@ public class SteamQRCodeAuthenticator
                 return;
             }
 
-            // Copy to MemoryStream for reliable deserialization
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-
-            if (ms.Length == 0)
-            {
-                return;
-            }
-
-            ms.Position = 0;
-
-            var qrResponse = Serializer.Deserialize<BeginAuthSessionViaQR_Response>(ms);
+            var qrResponse = Serializer.Deserialize<BeginAuthSessionViaQR_Response>(stream);
             if (qrResponse == null || qrResponse.ClientId == 0)
             {
                 return;
@@ -182,52 +245,46 @@ public class SteamQRCodeAuthenticator
 
         try
         {
-            var token = _mafile.SessionData.GetMobileToken();
-            if (token == null || token.Value.IsExpired)
-            {
-                ReportError("Mobile session expired. Please refresh session in main app.");
-                _approvalInProgress = false;
-                return;
-            }
-
-            var accessToken = token.Value.Token;
-            var steamId = _mafile.SessionData.SteamId;
-
-            StatusChanged?.Invoke(this, new AuthStatusEventArgs
-            {
-                Status = "Verifying login session...",
-                IsLoading = true
-            });
-
-            var httpClient = MaClient.GetHttpClientHandlerPair(_mafile).Client;
-
-            var sessionInfo = await AuthenticationServiceApi.GetAuthSessionInfo(
-                httpClient, accessToken, clientId);
-
-            var confirmReq = AuthRequestHelper.CreateMobileConfirmationRequest(
-                1, clientId, steamId.Steam64, _mafile.SharedSecret);
-
-            StatusChanged?.Invoke(this, new AuthStatusEventArgs
-            {
-                Status = $"Approving login from {sessionInfo.Country} ({sessionInfo.IP})...",
-                IsLoading = true
-            });
-
-            await AuthenticationServiceApi.UpdateAuthSessionWithMobileConfirmation(
-                httpClient, accessToken, confirmReq);
+            await EnsureAuthContextReadyAsync();
+            await SendApprovalAsync(clientId);
 
             _approved = true;
             StatusChanged?.Invoke(this, new AuthStatusEventArgs
             {
-                Status = $"Login approved! ({sessionInfo.Country}, {sessionInfo.IP}) Waiting for redirect...",
+                Status = "Login approved! Finalizing browser session...",
                 IsLoading = true
             });
+        }
+        catch (Exception ex) when (IsInvalidState(ex))
+        {
+            try
+            {
+                _authClient = null;
+                _accessToken = null;
+                _authPreparationTask = null;
 
-            // Do NOT navigate away — the browser's own JS polling loop will:
-            //   1. Call PollAuthSessionStatus and receive refresh_token + access_token
-            //   2. Call finalizelogin to set session cookies
-            //   3. Redirect to the inventory page
-            // Forcing navigation kills that flow since the browser has no cookies yet.
+                await EnsureAuthContextReadyAsync();
+                await SendApprovalAsync(clientId);
+
+                _approved = true;
+                StatusChanged?.Invoke(this, new AuthStatusEventArgs
+                {
+                    Status = "Login approved! Finalizing browser session...",
+                    IsLoading = true
+                });
+            }
+            catch (SessionPermanentlyExpiredException)
+            {
+                ReportError("Session expired. Please re-authenticate in the main app.");
+            }
+            catch (SessionInvalidException)
+            {
+                ReportError("Session invalid. Please log in again in the main app.");
+            }
+            catch (Exception retryEx)
+            {
+                ReportError($"Error: {retryEx.Message}");
+            }
         }
         catch (SessionPermanentlyExpiredException)
         {
@@ -246,6 +303,32 @@ public class SteamQRCodeAuthenticator
             if (!_approved)
                 _approvalInProgress = false;
         }
+    }
+
+    private async Task SendApprovalAsync(ulong clientId)
+    {
+        if (_authClient == null || string.IsNullOrWhiteSpace(_accessToken) || _mafile?.SessionData == null)
+        {
+            throw new SessionInvalidException("Session context not prepared");
+        }
+
+        var confirmReq = AuthRequestHelper.CreateMobileConfirmationRequest(
+            1, clientId, _mafile.SessionData.SteamId, _mafile.SharedSecret);
+
+        StatusChanged?.Invoke(this, new AuthStatusEventArgs
+        {
+            Status = "Approving login request...",
+            IsLoading = true
+        });
+
+        await AuthenticationServiceApi.UpdateAuthSessionWithMobileConfirmation(
+            _authClient, _accessToken, confirmReq);
+    }
+
+    private static bool IsInvalidState(Exception ex)
+    {
+        return ex.Message.Contains("0x8007139F", StringComparison.OrdinalIgnoreCase)
+               || ex.Message.Contains("not in the correct state", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ReportError(string message)
@@ -267,6 +350,8 @@ public class SteamQRCodeAuthenticator
             _coreWebView.WebResourceResponseReceived -= OnWebResourceResponseReceived;
             _coreWebView.NavigationCompleted -= OnNavigationCompleted;
         }
+
+        _authPreparationTask = null;
     }
 }
 

@@ -5,15 +5,15 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:md="http://materialdesigninxaml.net/winfx/xaml/themes"
         xmlns:viewModel="clr-namespace:NebulaAuth.ViewModel"
-        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
-        Title="Steam Inventory" WindowState="Maximized"
+        Title="Steam Browser" WindowState="Maximized"
         Style="{StaticResource MainWindow}"
         FontFamily="{md:MaterialDesignFont}"
         TextElement.Foreground="{DynamicResource BaseContentBrush}"
         d:DataContext="{d:DesignInstance viewModel:InventoryVM}"
         Background="{DynamicResource MaterialDesign.Brush.Background}"
-        Loaded="Window_Loaded">
+        Loaded="Window_Loaded"
+        Closed="Window_Closed">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -21,68 +21,191 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <Border Grid.Row="0" Padding="15,10,15,10" 
-                Background="{DynamicResource MaterialDesign.Brush.Card.Background}"
-                BorderThickness="0,0,0,1" BorderBrush="{DynamicResource MaterialDesign.Brush.Divider}">
+        <Border Grid.Row="0"
+                Background="#22252E"
+                BorderBrush="#333744"
+                BorderThickness="0,0,0,1"
+                Padding="8,8,8,6">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                <TextBlock VerticalAlignment="Center" FontSize="18" FontWeight="Bold" 
-                           Text="Steam Inventory" />
+                <Grid Grid.Row="0" Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="1" 
-                        Style="{StaticResource MaterialDesignFlatButton}"
-                        Content="Refresh"
-                        Click="RefreshButton_Click" />
+                    <TabControl x:Name="BrowserTabs"
+                                SelectionChanged="BrowserTabs_SelectionChanged"
+                                Background="#2B2F3A"
+                                BorderThickness="0"
+                                MinHeight="34" />
+
+                    <Button x:Name="NewTabButton"
+                            Grid.Column="1"
+                            Margin="8,0,0,0"
+                            MinWidth="34"
+                            Height="30"
+                            Style="{StaticResource MaterialDesignFlatButton}"
+                            Content="+"
+                            ToolTip="New tab"
+                            Click="NewTabButton_Click" />
+
+                    <Button x:Name="CloseCurrentTabButton"
+                            Grid.Column="2"
+                            Margin="6,0,0,0"
+                            MinWidth="34"
+                            Height="30"
+                            Style="{StaticResource MaterialDesignFlatButton}"
+                            Content="×"
+                            ToolTip="Close current tab"
+                            Click="CloseCurrentTabButton_Click" />
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Button x:Name="BackButton"
+                            Width="34" Height="32"
+                            Margin="0,0,6,0"
+                            Style="{StaticResource MaterialDesignToolButton}"
+                            Content="←"
+                            Click="BackButton_Click" />
+
+                    <Button x:Name="ForwardButton"
+                            Grid.Column="1"
+                            Width="34" Height="32"
+                            Margin="0,0,6,0"
+                            Style="{StaticResource MaterialDesignToolButton}"
+                            Content="→"
+                            Click="ForwardButton_Click" />
+
+                    <Button x:Name="ReloadButton"
+                            Grid.Column="2"
+                            Width="34" Height="32"
+                            Margin="0,0,6,0"
+                            Style="{StaticResource MaterialDesignToolButton}"
+                            Content="↻"
+                            Click="ReloadButton_Click" />
+
+                    <Button x:Name="HomeButton"
+                            Grid.Column="3"
+                            Width="34" Height="32"
+                            Margin="0,0,8,0"
+                            Style="{StaticResource MaterialDesignToolButton}"
+                            Content="⌂"
+                            Click="HomeButton_Click" />
+
+                    <Border Grid.Column="4"
+                            Background="#15181F"
+                            CornerRadius="16"
+                            BorderBrush="#3A3F4D"
+                            BorderThickness="1"
+                            Padding="12,0">
+                        <TextBox x:Name="AddressBar"
+                                 VerticalContentAlignment="Center"
+                                 Height="30"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Foreground="#E6E9EF"
+                                 ToolTip="Search or type a URL" />
+                    </Border>
+
+                    <Button Grid.Column="5"
+                            Margin="8,0,6,0"
+                            MinWidth="70"
+                            Height="32"
+                            Style="{StaticResource MaterialDesignFlatButton}"
+                            Content="Go"
+                            Click="OpenAddressButton_Click" />
+
+                    <Button Grid.Column="6"
+                            MinWidth="42"
+                            Height="32"
+                            Style="{StaticResource MaterialDesignFlatButton}"
+                            Content="★"
+                            ToolTip="Save current bookmark"
+                            Click="SaveBookmarkButton_Click" />
+                </Grid>
+
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border x:Name="BookmarkBarHost"
+                            Grid.Column="0"
+                            Background="Transparent"
+                            Padding="0,2">
+                        <ScrollViewer x:Name="BookmarkBarScrollViewer"
+                                      HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled"
+                                      Margin="0,0,8,0">
+                            <WrapPanel x:Name="BookmarkBarPanel"
+                                       Orientation="Horizontal" />
+                        </ScrollViewer>
+                    </Border>
+
+                    <ComboBox x:Name="BookmarksComboBox"
+                              Grid.Column="1"
+                              MinWidth="260"
+                              Height="30"
+                              VerticalAlignment="Center"
+                              IsTextSearchEnabled="True"
+                              DisplayMemberPath="Title"
+                              SelectionChanged="BookmarksComboBox_SelectionChanged" />
+                </Grid>
             </Grid>
         </Border>
 
-        <!-- WebView2 Browser + Login Overlay -->
-        <Grid Grid.Row="1">
-            <!-- WebView2 — visible only after login -->
-            <wv2:WebView2 x:Name="SteamWebView" Margin="0"
-                          Visibility="{Binding IsLoading, Converter={StaticResource InverseBooleanToVisibilityConverter}}" />
+        <Grid Grid.Row="1" Background="#1A1D24">
+            <ContentPresenter x:Name="BrowserContentHost" />
 
-            <!-- Login overlay — shown while authenticating -->
-            <Border Background="#FF1B2838"
+            <Border Background="#CC1B2838"
                     Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <!-- Steam-styled loading spinner -->
                     <ProgressBar Style="{StaticResource MaterialDesignCircularProgressBar}"
                                  IsIndeterminate="True" Width="64" Height="64"
                                  Foreground="#66C0F4" />
 
-                    <!-- Status text -->
                     <TextBlock Text="{Binding StatusMessage, Mode=OneWay}"
                                FontSize="16" Foreground="#C7D5E0"
                                HorizontalAlignment="Center" Margin="0,24,0,0"
-                               TextWrapping="Wrap" MaxWidth="400"
+                               TextWrapping="Wrap" MaxWidth="500"
                                TextAlignment="Center" />
-
-                    <!-- Subtle hint -->
-                    <TextBlock Text="Signing in automatically with your authenticator..."
-                               FontSize="12" Foreground="#556B7F"
-                               HorizontalAlignment="Center" Margin="0,12,0,0" />
                 </StackPanel>
             </Border>
         </Grid>
 
-        <!-- Status bar -->
-        <Border Grid.Row="2" Padding="15,10,15,10" 
-                Background="{DynamicResource MaterialDesign.Brush.Card.Background}"
-                BorderThickness="0,1,0,0" BorderBrush="{DynamicResource MaterialDesign.Brush.Divider}">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Margin="0,0,15,0" Foreground="{DynamicResource SecondaryContentBrush}">
+        <Border Grid.Row="2" Padding="12,8"
+                Background="#20242F"
+                BorderThickness="0,1,0,0" BorderBrush="#333744">
+            <DockPanel>
+                <ProgressBar DockPanel.Dock="Right"
+                             Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                             IsIndeterminate="True"
+                             Width="120" Height="4"
+                             VerticalAlignment="Center" />
+
+                <TextBlock Foreground="#9FA8B8">
                     <Run Text="Status: " />
                     <Run Text="{Binding StatusMessage, Mode=OneWay}" />
                 </TextBlock>
-                <ProgressBar Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
-                             IsIndeterminate="True" Margin="10,0,0,0" Width="100" Height="4" VerticalAlignment="Center" />
-            </StackPanel>
+            </DockPanel>
         </Border>
     </Grid>
 </Window>

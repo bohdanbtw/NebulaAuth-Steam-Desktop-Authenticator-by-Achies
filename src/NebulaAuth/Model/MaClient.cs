@@ -34,13 +34,31 @@ public static class MaClient
         ClientHandler = pair.Handler;
     }
 
+    public static ProxyData? ResolveEffectiveProxyData(Mafile mafile)
+    {
+        var accountProxy = mafile.Proxy;
+        if (accountProxy != null)
+        {
+            if (ProxyStorage.Proxies.TryGetValue(accountProxy.Id, out var existingById) && existingById.Equals(accountProxy.Data))
+            {
+                return existingById;
+            }
+
+            if (ProxyStorage.Proxies.Values.Any(p => p.Equals(accountProxy.Data)))
+            {
+                return accountProxy.Data;
+            }
+        }
+
+        return DefaultProxy;
+    }
 
     public static void SetAccount(Mafile? account)
     {
         ClientHandler.CookieContainer.ClearAllCookies();
         if (account == null) return;
         ClientHandler.CookieContainer.SetSteamMobileCookiesWithMobileToken(account.SessionData);
-        Proxy.SetData(account.Proxy?.Data);
+        Proxy.SetData(ResolveEffectiveProxyData(account));
     }
 
     public static Task<IEnumerable<Confirmation>> GetConfirmations(Mafile mafile)
@@ -135,7 +153,7 @@ public static class MaClient
 
     private static void SetProxy(Mafile mafile)
     {
-        Proxy.SetData(mafile.Proxy?.Data ?? DefaultProxy);
+        Proxy.SetData(ResolveEffectiveProxyData(mafile));
     }
 
     private static void ValidateMafile(Mafile mafile, bool ignoreAccessToken = false)
